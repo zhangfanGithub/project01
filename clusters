@@ -1,0 +1,989 @@
+存储技术与应用 iSCSI技术应用
+udev配置 NFS网络文件系统
+Multipath多路径
+NFS网络文件系统
+udev配置
+
+======10.8=========存储技术与应用(前端+后端)==================早上============
+集群与操作  5天
+
+LB集群
+HA集群
+
+存储  
+iscsi  共享存储
+ceph  分布式存储  
+
+存储技术分类
+scsi小型计算机系统接口
+DAS直连式存储
+NAS网络技术存储
+SAN存储区域网络  :数据包装在ip包里,所以不受距离限制;双绞线的链接ip-san;光纤的链接fc-san
+FC光纤通道 
+
+
+hba光纤模块,硬件
+san技术: 
+	 点到点: point-to-point 
+	已裁定的环路: 可多达126个设备共享一段信道
+	交换式拓扑 : 所有设备通过光纤交换机互联
+---------------------早上-------------搭建iscsi-------
+案例1. 配置iscsi服务
+需要一台iscsi服务器51,单独配置一块硬盘5G,共享给客户端50.
+	客户端: iscsi initiator :软件实现,成本低,性能较低
+	iscsi HBA : 硬件实现,性能好成本较高
+	存储设备端  iscsi Target
+	以太网交换机
+systemctl status  NetworkManager  查看网络模块
+停掉
+在50启动httpd,并测试网页到ok
+配置iscsi
+.xml  扩展标记语言
+[root@mysql51 ~]# cat  /etc/target/saveconfig.json    -----------查看配置的文件
+{
+  "fabric_modules": [], 
+  "storage_objects": [], 
+  "targets": []
+}
+后端51: 
+安装targetcli,进入---->  targetcli
+
+/> ls
+	/> backstores/block  create  diskb /dev/vdb
+	/> iscsi/ create  iqn.2018-10.cn.tedu.storage51:vdb
+	/> iscsi/iqn.2018-10.cn.tedu.storage51:vdb/tpg1/acls  create   iqn.2018-10.cn.tedu:client50
+	/> iscsi/iqn.2018-10.cn.tedu.storage51:vdb/tpg1/luns create /backstores/block/diskb
+	定义客户端访问ip,  ------------可以不定义(默认所有)
+前端50:
+装包
+	# yum -y install iscsi-initiator-utils
+	 systemctl restrt iscsi
+修改配置文件
+	[root@client ~]# vim /etc/iscsi/initiatorname.iscsi 
+	InitiatorName=iqn.2018-01.cn.tedu:client1
+	注意：必须跟服务器上配置的ACL一致！
+发现设备
+	参考man iscsiadm！
+	iscsiadm --mode discoverydb --type sendtargets --portal 192.168.4.51 --discover
+登入设备
+ 	iscsiadm --mode node --targetname iqn.2018-10.cn.tedu.storage51:vdb --portal 192.168.4.51:3260 --login
+登出
+	...............--logout(登出时,先卸载,)
+
+
+
+------------下午-----------udev---修改设备定义名------------------
+由于挂载分区的名称会发生变化,例:sda  --->  sdb
+IDE  hd开头   
+udev :
+	处理设备命名
+	决定要创建哪些设备文件或链接
+	决定如何设置属性
+	决定触发哪些事件
+如何获取已经拥有的设备名
+udevadmin  monitor  --help
+udevadmin  monitor  --property   ---------------插入u盘,显示u盘的信息
+
+# udevadm  info  -q  path   -n  /dev/sdb    -------------获取路径
+/devices/platform/host3/session2/target3:0:0/3:0:0:0/block/sdb   ----------获取到的路径(不一样)
+取得路径后
+udevadm  info  -q  all -p [上面的路径] -a    ---------------获取一堆信息
+
+SUBSYSTEM=="block",  (设备类型(块))
+ATTR{size}=="10485760",  (大小)
+ATTRS{model}=="diskb           ",   (型号)
+ATTRS{vendor}=="LIO-ORG ",  (厂商)
+
+那如何编写定义呢?
+vim  /etc/udev/rules.d/[1-99]数字-描述信息.rules   ----------->定义规则
+写入:
+SUBSYSTEM=="block",ATTR{size}=="10485760",ATTRS{model}=="diskb           ",ATTRS{vendor}=="LIO-ORG ",SYMLINK+="iscsi/vdb"
+登出,登入,
+查看  /dev/iscsi/vdb
+
+# ls -l  /dev/iscsi/vdb 
+lrwxrwxrwx. 1 root root 6 10月  8 16:46 /dev/iscsi/vdb -> ../sdc    -------->是sdc设备的别名
+
+# mount  /dev/iscsi/vdb   /var/www/html/    --------------再次挂载,出现错误
+mount: /dev/sdc 写保护，将以只读方式挂载
+mount: 未知的文件系统类型“(null)”
+原因:  udev对设备进行了修改,让系统不在识别,需要删除分区,重新分区和格式化
+
+
+常见指令 
+!=  不匹配
+=   指定赋予的值
++=  添加新值
+:=   指定值,且不允许被替换
+NAME="udisk"    定义设备名称
+SYMLINK+="data1"  定义设备 别名
+OWNER="student"   定义设备的所有者
+MODE="0600"    定义设备的权限
+ACTION=="add"   判断设备的操作动作
+KERNEL=="sd[a-z]1"  判断设备的内核名称
+RUN+=程序   为设备添加程序
+-------------多路径------------------------
+利用两个ip进行登入,会有两个设备名(其实同一个)
+为了解决
+# yum install -y device-mapper-multipath     
+利用2.51发现
+使用2.51登入   
+mpathconf   --user_friendly_names n    ------------生成配置文件
+获取wwid
+	[root@mysql50 /]# find  /  -name "scsi_id"     ------------
+	/usr/lib/udev/scsi_id
+	[root@mysql50 /]# /usr/lib/udev/scsi_id   --whitelisted  /dev/
+	[root@mysql50 /]# lsblk
+	NAME          MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+	sdc             8:32   0    5G  0 disk 
+	sdd             8:48   0    5G  0 disk 
+	sr0            11:0    1 1024M  0 rom  
+	vda           252:0    0   20G  0 disk 
+	├─vda1        252:1    0    1G  0 part /boot
+	└─vda2        252:2    0   19G  0 part 
+	  ├─rhel-root 253:0    0   17G  0 lvm  /
+	  └─rhel-swap 253:1    0    2G  0 lvm  [SWAP]
+	vdb           252:16   0    2G  0 disk 
+	[root@mysql50 /]# /usr/lib/udev/scsi_id   --whitelisted   /dev/sdc
+	36001405197a21aaadef4d4196efe5a65
+	[root@mysql50 /]# /usr/lib/udev/scsi_id   --whitelisted   /dev/sdd
+	36001405197a21aaadef4d4196efe5a65
+修改配置文件
+[root@web1 ~]# vim /etc/multipath.conf
+defaults {
+        user_friendly_names yes
+find_multipaths yes
+}
+
+multipaths {
+    multipath {
+        wwid    "36001405197a21aaadef4d4196efe5a65"
+        alias   mpatha
+    }
+}
+[root@web1 ~]# systemctl start multipathd
+[root@web1 ~]# systemctl enable multipathd
+
+# partprobe ; multipath -rr   ------重载
+
+multipath -ll    -----------查看状态
+
+------------------添加网卡-----
+cd  /etc/sysconfig/network-scripts
+cp ifcfg-eth0
+	TYPE=Ethernet
+	BOOTPROTO=none
+	NAME=et1
+	DEVICE=eth1
+	ONBOOT=yes
+	IPADDR=192.168.2.50
+systemctl restart  network        ----------------重启网卡
+
+======10.9===二天=========NFS==集群====LVS-NAT===LVS-DR=====================
+	
+iscsi   不可以同时挂载
+	  适合HA集群
+	  不适合LB
+51上  创建以下命令(多挂载)
+/> iscsi/iqn.2018-10.cn.tedu.storage51:vdb/tpg1/acls/ create iqn.2018-10.cn.tedu:client52
+/> iscsi/iqn.2018-10.cn.tedu.storage51:vdb/tpg1/acls/ create iqn.2018-10.cn.tedu:client53
+
+在52和53上进行发现和登入51的同一磁盘空间,
+
+总结:  可以共享登入前已有的数据,  但是新加入的数据互相不允许共享,当52把开始已有的test.html文件删除,在53上卸载且重新登入挂载后,该文件也会消失
+ext4本地检查文件系统   
+gfs  全局文件系统  额外设置才可以
+
+NFS服务
+在51上2G磁盘分区格式化mkfs.ext4,挂载到/sharedir文件夹
+vim  /etc/export
+	/sharedir   *(rw,no_root_squash)
+sync , async  :同步写, 异步写入
+no_root_squash : 保留来自客户端 的root权限
+all_squash : 客户端权限都降为nfsnobody
+
+客户端挂载
+mount  192.168.4.51:/sharedir  /var/www/html    ---------->  挂载,
+
+---------------------LB负载均衡--------------------------
+LB负载均衡集群
+软件lvs,Haproxy , nginx
+
+lvs(linux虚拟服务器)
+	 术语
+	 Director  Server  : 调度服务器 
+		:将负载分发到Real Server 的服务器
+	 Real Server 真实服务器
+	 vip 虚拟ip地址(公网)
+	 rip 真实ip : 集群节点上使用的ip地址(私网)
+	 dip 调度器链接节点服务器的ip地址
+
+
+vs/NAT模式: 经过调度服务器
+vs/DR模式 : 直连路由,不经过调度服务器
+vs/TUN模式 : 隧道模式,很少使用
+
+LVS算法:
+	轮询(常用4种)
+	加权轮询
+	最少连接
+	加权最少连接
+	
+	源地址散列l
+	基于局部性的最少连接
+	带复制的基于局部性最少链接
+	目标地址散列
+	最短的期望的延迟
+	最少队列调度
+	
+LVS/NAT模式
+    环境: 
+	50:客户端
+		eth1:192.168.2.50
+	54:调度器
+	 	eth0:192.168.4.54
+		eth1: 192.168.2.54
+		开启内核路由功能
+	52:	eth0:192.168.4.52
+	53:	eth0:192.168.4.51
+	
+	vim  /etc/sysctl.conf    -------------------------->开启路由
+	添加  net.ipv4.ip_forward=1
+	然后  sysctl  -p      显示生效的意思
+	-a  内核所有参数
+
+	route -n  查看网关
+	route  add/del   default gw 192.168.4.54    -------------------添加/删除网关
+		  
+安装集群管理软件ipvsadm
+不用启动,配置完后会自己启动.
+1. ipvsadm用法
+-A  添加虚拟服务器
+-t  设置群集地址(VIP)
+-s  指定负载调度算法
+
+-a  添加真实服务器
+-d  删除真实服务器
+-r  指定真实服务器
+-m  使用NAT模式; -g , -i分别对应DR,TUN模式
+-w 为节点服务器设置权重,默认为1
+2. 在54配置
+# ipvsadm -A -t 192.168.2.54:80  -s rr
+# ipvsadm -a  -t 192.168.2.54:80 -r 192.168.4.52:80 -m
+# ipvsadm -a  -t 192.168.2.54:80 -r 192.168.4.53:80 -m
+
+3. 保-*存
+# ipvsadm -S
+-A -t mysql54:http -s rr
+-a -t mysql54:http -r 192.168.4.52:http -m -w 1
+-a -t mysql54:http -r 192.168.4.53:http -m -w 1
+ipvsadm-save >  /etc/sysconf/ipvsadm.conf  ----------------保存到配置文件
+4. 查看  ipvsadm  -Ln   
+   修改  ipvsadm -E  -t  192.168.2.54:80 -s wrr
+5. 删除  ipvsadm  -C    删除所有
+    删除一个    ipvsadm -d   -t  192.168.2.54:80    -r 192.168.4.52:80    
+ 注意 : 如果写成8080 会认成webcache
+6. 查看详细信息
+watch -n 1 ipvsadm -L   --stats    ---------------每隔1秒显示状态信息
+	
+LVS/DR模式  
+	  需求: 客户端访问vip地址,19.168.4.253 访问网站
+	  1.在54的eth0绑定vip地址
+	  ifconfig  eth0:1 192.168.4.253   ----------当前有效
+	  vim /etc/rc.local  里写入这一行,系统启动会先执行   ---------永久有效
+	  2.添加
+	  [root@mysql54 ]# ipvsadm -A -t 192.168.4.253:80 -s rr
+	  [root@mysql54]# ipvsadm -a -t 192.168.4.253:80 -r 192.168.4.52:80 -g
+	  [root@mysql54]# ipvsadm -a -t 192.168.4.253:80 -r 192.168.4.53:80 -g
+	  3.保存
+	  ipvsadm-save >　/etc/sysconfig/ipvsadm    ---------------不要table键
+	
+	  
+	 　4．52和53修改网络接口内核参数
+	  cd  /proc/sys/net/ipv4/conf/   进入网卡信息
+	  echo 1 > /proc/sys/net/ipv4/conf/lo/arp_ignore     ----------忽略广播
+	  echo 2 > /proc/sys/net/ipv4/conf/lo/arp_announce	---------对查询目标使用最适当的本地地址
+	  echo 1 > /proc/sys/net/ipv4/conf/all/arp_ignore
+	  echo 2 > /proc/sys/net/ipv4/conf/all/arp_announce
+	  在命令框只会当前有效,加入到/etc/rc.local  文件里(自启动文件)
+	 
+	  5.在52和53lo口绑定(真机查看)
+	  ifconfig  lo:1 192.168.4.253/32
+	  
+	  6.客户端查看
+	  #for i in `seq 20`; do curl http://192.168.4.253; done
+
+
+
+-------------------------
+HA高可用集群
+软件: keepalived
+-------------------------------------------扩展-----------------------
+扩展lvs
+不能对r s (真机) 服务做健康检查
+应该,检查服务器的80端口(nmap),如果有一台端口挂了,则删除调度服务器上的ipvsadm的一个服务信息.
+
+DR模式,如果在实际环境中直接访问调度器,则都要是公网ip.
+如果有路由器则需要NAT技术.
+arp_ignore   1:表示只回答目标IP地址是来访网络接口本地地址的ARP查询请求
+		 0: 回应任何网络接口上对任何本地IP地址的arp查询请求
+arp_announce   0:
+		    2: 对查询目标使用最适当的本地地址.在此模式下将忽略这个IP数据包的源地址并尝试选择与能与该地址通信的本地地址.首要是选择所有的网络接口的子网中外出访问子网中包含该目标IP地址的本地地址. 如果没有合适的地址被发现,将选择当前的发送网络接口或其他的有可能接受到该ARP回应的网络接口来进行发送.
+
+在设置参数的时候将arp_ignore 设置为1，意味着当别人的arp请求过来的时候，如果接收的设备上面没有这个ip，就不做出响应，默认是0，只要这台机器上面任何一个设备上面有这个ip，就响应arp请求，并发送mac地址
+
+
+===========10.10=========HA 高可用集群======Keepalived==================
+
+
+需要主机55  57
+使用哪两台高可用集群,就得安装Keepalived软件
+yum  -y install   keepalived
+
+
+配置主服务器
+修改配置文件: vim /etc/keepalived/keepalived.conf
+
+	global_defs {
+	  notification_email {
+	    admin@tarena.com.cn                //设置报警收件人邮箱
+	  }
+	  notification_email_from ka@localhost    //设置发件人
+	  smtp_server 127.0.0.1                //定义邮件服务器
+	  smtp_connect_timeout 30
+	  router_id  web1                        //设置路由ID号（实验需要修改）
+	#vrrp_strict           //注释掉	
+	}
+	vrrp_instance webha {		------>修改名称一样,表示同一个集群
+	  state MASTER                         //只是描述 MASTER（slave）
+	  interface eth0                    //定义网络接口（实验需要修改）
+	  virtual_router_id 50                //主辅VRID号必须一致（实验需要修改）
+	  priority 100                     //服务器优先级,优先级高优先获取VIP（主的要改大）
+	  advert_int 1
+	  authentication {
+	    auth_type pass
+	    auth_pass forlvs                       //主辅服务器密码必须一致
+	  }
+	  virtual_ipaddress { 192.168.4.80  }    //谁是主服务器谁获得该VIP（实验需要修改）
+	}
+35行一下全删,因为是配置lvs集群的.
+ systemctl start keepalived   -----------启动
+ip  add  show   ------->查看vip
+
+配置备用服务器
+修改配置文件: vim /etc/keepalived/keepalived.conf
+先启动优先级高的.
+配置与上一样.
+
+client验证 :  curl  http://192.168.4.252    ----------显示主的web网页
+
+验证:  55宕机keepalived后,修复,启动  直接ok
+	但如果httpd停掉后,会出现拒绝连接.------>解决思路:  写个脚本,服务停了,则停keepalived
+session
+
+-----------------下午------------------
+案例3：Keepalived+LVS服务器
+56作为lvs集群的调度服务器备胎.
+
+关闭vip(因为临时的)
+	在真机  ifdown  eth0
+		ifup  eth0
+54做调度主,56做调度从:
+	都先装  yum  -y  install  keepalived
+都修改配置文件:
+		参照10.9
+		注释14行 # vrrp_strict
+
+   	参照ipvsadm的配置来做的: 很像
+   	...
+	virtual_server 192.168.4.253 80 {		-------------虚拟vip()
+	    delay_loop 6
+	    lb_algo rr		//算法
+	    lb_kind DR		//NAT和DR
+	    persistence_timeout 50
+	    protocol TCP
+	    
+		    connect_timeout 3
+		    nb_get_retry 3
+		    delay_before_retry 3
+	    real_server 192.168.4.52 80 {      //删掉  复制   粘贴
+		weight 1
+	    }       
+	    real_server 192.168.4.53 80 {
+		weight 1
+	    }
+	}
+启动,开机自启
+
+扩展:
+	keepalived  对lvs高可用开发的,使用下面的策略解决-服务挂掉后的问题.
+	 real_server 192.168.4.52 80 {
+		weight 1
+		TCP_CHECK {		-------在真机添加TCP_CHECK (有空格)
+		connect_timeout 3
+		nb_get_retry 3
+		delay_before_retry 3
+		}
+	    }
+  删除服务ipvsadm  -D  服务ip:端口
+  则该类的所有都删除
+------负载均衡服务集群-----------Haproxy---配置LB集群------------------
+HAProxy分析
+优点
+–  支持session、cookie功能
+–  可以通过url进行健康检查
+–  效率、负载均衡速度,高于Nginx,低于LVS
+–  HAProxy支持TCP,可以对MySQL进行负载均衡
+–  调度算法丰富
+缺点
+–  正则弱于Nginx
+–  日志依赖于syslogd,不支持apache日志
+
+http协议时事务驱动的
+每个请求(Request) 仅能对应一个响应(response)
+常见模型: 
+	http cloce:每次请求建立一次连接
+	keep-alive:保持链接
+	Pipelining:发完请求无需得到回应,可以继续发送下一次请求
+
+使用55 57两台主机做服务器,  56做haproxy服务器:
+yum -y install  haproxy.x86_64
+
+vim /etc/haproxy/haproxy.cfg
+	global  全局配置文件
+	default  为以下提供缺省参数的
+	frontend   描述接受客户端侦听套接字
+	listen  把frontend和backend结合到一起的完整声明
+
+
+59行以后删除,且添加以下命令
+
+listen weblb  192.168.4.56:80
+        cookie  SERVERID rewrite
+        balance  roundrobin
+
+        server weba 192.168.4.55:80 cookie app1inst1 check inter  2000  rise 2 fall 5
+        server webb 192.168.4.57:80 cookie app2inst2 check inter  2000(毫秒)  rise 2(毫秒) fall 5  (次数)
+
+在default  最后添加 stats uri  /admin
+
+启动systemctl  start  haproxy
+
+
+在真机去验证  浏览器 192.168.4.56/admin
+
+============10.11=====CEPH=============两天============================
+ceph是一个分布式文件系统
+环境配置
+分布式文件系统的特点:
+	高扩展 , 高可用 , 高性能
+常用分布式文件系统
+•  Lustre
+•  Hadoop
+•  FastDFS
+•  Ceph
+•  GlusterFS
+
+------------------------
+50client
+51  三块盘(10G/1个)
+52  三块盘(10G/1个)
+53  三块盘(10G/1个)
+ 
+rhcs2.0-rhosp9-20161113-x86_64  镜像文件  挂载到ftp(真机)
+网络yum源
+
+[mon]
+name=mon
+baseurl=ftp://192.168.4.254/ceph/rhceph-2.0-rhel-7-x86_64/MON
+enable=1
+gpgcheck=0
+[osd]
+name=osd
+baseurl=ftp://192.168.4.254/ceph/rhceph-2.0-rhel-7-x86_64/OSD
+enable=1
+gpgcheck=0
+[tools]
+name=tools
+baseurl=ftp://192.168.4.254/ceph/rhceph-2.0-rhel-7-x86_64/Tools
+enable=1
+gpgcheck=0
+
+ssh无密码登录,且51可以登录自己(ceph的宿服务主机)
+NTP  以50为服务器 
+hosts  修改主机名与其一样(主机名映射)
+
+---------------------------------------
+ceph分布式文件存储
+存储方式:
+	对象存储
+	块存储
+	文件系统存储
+	
+ceph组件:
+	OSDs   设备(硬件)
+	Monitors  监视
+	MDSs  存放系统的元数据
+	Client  客户端
+-----------------------------------------
+51安装   yum -y install  ceph-deploy.noarch 
+就会有ceph-deploy命令
+ceph-deploy --help    ----------->
+
+创建ceph的根目录
+	[root@mysql51 ~]# mkdir  /root/ceph-cluster
+	[root@mysql51 ~]# cd  /root/ceph-cluster/     -------->进去后,开始创建集群
+
+	ceph-deploy  new  mysql51 mysql52  mysql53     ----------->创建
+	 
+	ceph-deploy  install   mysql51 mysql52  mysql53    ----------->安装
+	完毕！
+	ceph-deploy  mon  create-initial   --------------初始化所有节点的mon服务
+//这里没有指定主机,因为第一步创建的配置文件中已经有了.
+//这里要求主机名解析必须对,否则链接不到对应的主机.
+会常见出错:admin_socket:
+	解决方案: vim  /root/ceph-cluster/ceph.conf  文件最后追加
+	public_network = 192.168.4.0/24
+	修改后重新推送配置文件
+	ceph-deploy --overwrite-conf config  push  mysql51 mysql52 mysql53
+
+---------------------
+1.2 创建OSD
+1.2.1 创建日志盘(使用vdb做日志盘)51 52  53
+	parted  /dev/vdb  mklabel  gpt
+	parted   /dev/vdb  mkpart  primary  1M  50%
+	parted   /dev/vdb  mkpart  primary  50%  100%
+
+	chown  ceph.ceph  /dev/vdb1
+	chown  ceph.ceph  /dev/vdb2
+
+	echo "chown  ceph.ceph  /dev/vdb*" >> /etc/rc.local
+	chmod  +x  /etc/rc.local
+
+
+
+初始化清空磁盘数据(仅mysql51操作)
+	ceph-deploy disk zap  mysql51:vdc  mysql51:vdd
+	ceph-deploy disk zap  mysql52:vdc  mysql52:vdd
+	ceph-deploy disk zap  mysql53:vdc  mysql53:vdd
+
+在管理主机上,创建osd设备(仅在mysql51操作)
+	创建osd存储设备,vdc为集群提供存储空间,vdb1提供JOURNAL日志,一个存储设备对应一个日志设备,日志需要SSD,不需要很大.
+	ceph-deploy  osd  create mysql51:vdc:/dev/vdb1 mysql51:vdd:/dev/vdb2
+
+	ceph-deploy  osd  create mysql52:vdc:/dev/vdb1 mysql52:vdd:/dev/vdb2
+
+	ceph-deploy  osd  create mysql53:vdc:/dev/vdb1 mysql53:vdd:/dev/vdb2
+
+	ceph  -s  查看集群状态
+	显示:
+	health HEALTH_OK
+     monmap e1: 3 mons at {mysql51=192.168.4.51:6789/0,mysql52=192.168.4.52:6789/0,mysql53=192.168.4.53:6789/0}
+            election epoch 4, quorum 0,1,2 mysql51,mysql52,mysql53
+     osdmap e39: 6 osds: 6 up, 6 in
+            flags sortbitwise
+      pgmap v81: 64 pgs, 1 pools, 0 bytes data, 0 objects
+            203 MB used, 61170 MB / 61373 MB avail
+                  64 active+clean
+
+如提示run 'gatherkeys'
+	ceph-deploy  gatherkeys  mysql51 mysql52 mysql53
+如ceph -s失败
+	systemctl  restart  ceph\*.service ceph\*.target
+
+
+-------------------------------下午--ceph块存储-----------
+概述
+
+	ceph  osd  lspools   ------------>编号是0的池(查看存储池)
+
+	rbd  list
+	
+	rbd  create  demo-image  --image-feature  layering  --size 10G    ---------创建镜像(默认第一个池)
+	或rbd  create  rbd/demo-image  --image-feature  layering  --size 10G
+		(池名/名字)  		
+	rbd  info demo-image
+		显示:
+		rbd image 'demo-image':
+		size 10240 MB in 2560 objects
+		order 22 (4096 kB objects)
+		block_name_prefix: rbd_data.1037238e1f29
+		format: 2
+		features: layering
+		flags: 
+
+缩小容量(demo-image)
+
+	rbd  resize  --size  7G  demo-image  --allow-shrink   缩小到7G
+	rbd  info  demo-image(块名)
+
+	rbd  resize  --size  15G     demo-image    扩大到15G
+将镜像映射为本地磁盘
+	rbd map  demo-image   				----------将镜像映射为本地磁盘
+	/dev/rbd0
+	lsblk   ---->rbd0          251:0    0   10G  0 disk(显示)
+	
+	对磁盘rbd0格式化  或者分区后格式化
+	mkfs.ext4   /dev/rbd0
+	# blkid  /dev/rbd0
+	/dev/rbd0: UUID="9b8172c3-9a2a-4bfe-b753-3befd309d0bf" TYPE="ext4" 
+	挂载  mount  /dev/rbd0   /note(任意文件夹)
+
+--------------客户端通过KRBD访问------
+50client  客户端使用时要装
+	yum  -y  install  ceph-common
+	
+	[root@mysql50 ~]#  ls /etc/ceph/
+	rbdmap
+	从管理主机拷贝集群配置文件(不拷贝客户机没法访问)
+	scp  192.168.4.51:/etc/ceph/ceph.conf   /etc/ceph		-----------配置文件(否则不知道集群在哪)
+	scp  192.168.4.51:/etc/ceph/ceph.client.admin.keyring    /etc/ceph/    ----链接秘钥文件(否则无连接权限)
+ 
+	映射镜像到本地磁盘
+	rbd  map  demo-image(名字)
+	lsblk
+	rbd  showmapped
+	客户端格式化,挂载分区
+
+
+查看镜像快照
+	rbd  snap  ls   demo-image
+	在管理主机上给被挂载的镜像创建镜像快照(COW技术 copy Online write)
+	rbd  snap create  demo-image  --snap  image-snap1      ----------创建快照
+	
+	测试:  rm  -rf   /note/a.txt
+	rbd  snap  rollback  demo-image  --snap  image-snap1   -----------恢复镜像(需要二次)
+	卸载umount   /note
+	重新挂载  mount  /dev/rbd0   /note
+	
+快照克隆
+	防止在克隆时有人写数据到镜像,
+	rbd  snap  protect demo-image  --snap  image-snap1   -----保护
+	
+	rbd  snap  unprotect demo-image  --snap  image-snap1	----取消保护
+	
+	//使用image-snap1 克隆一个新的image-clone镜像
+	rbd  clone  demo-image --snap image-snap1  image-clone  --image-feature   layering(层级)
+	
+	rbd  flatten  image-clone
+
+
+客户端不使用seph集群的块设备存储数据
+	1.撤销镜像映射(先卸载)
+	rbd  unmap   /dev/rbd/rbd/image
+
+	在管理主机上删除创建的镜像(有快照先删除快照文件)
+	rbd snap  rm  image  --snap   image-snap1   ---------删除快照(可能失败)
+	
+	
+
+
+==============10.12=========在ceph空间安装虚拟机===============
+虚拟机  /etc/
+
+在管理主机上创建安装虚拟机的镜像文件  vm1-image  
+rbd  create  vm1-image  --image-feature  layering  --size  10G
+
+
+真机配置为客户端:  yum源配置   装包ceph-common
+拷贝ceph.client.admin.keyrin和ceph.conf到真机.
+
+scp  /root/ceph-cluster/ceph.client.admin.keyring   192.168.4.254:/etc/ceph/
+scp  /root/ceph-cluster/ceph.conf   192.168.4.254:/etc/ceph/
+在真机安装虚拟机,不需要安装操作系统
+
+配置 libvirt secret
+kvm用来连接ceph的一个工具()
+  KVM虚拟机需要使用librbd才可以访问ceph集群
+  Librbd访问ceph又需要账户认证
+  所以这里,我们需要给libvirt设置账户信息
+-------------------给虚拟机换位置-------------------------------------创建虚拟机,不安装系统
+#	vim	/etc/libvirt/qemu/vm1.xml	  -----------------会有配置文件生成
+
+[root@room9pc01	~]#vim secret.xml				//新建临时文件,内容如下
+	<secret ephemeral='no'  private='no'>
+	<usage  type='ceph'>
+	<name>client.admin      secret</name>      -----和管理文件里面的名字一样
+	</usage>
+	</secret>
+#virsh secret-define --file /root/secret.xml		-------生成账户uuid
+	生成 secret 3ac51a75-07f4-43e4-a0e7-91476b934870
+
+#virsh  secret-undefine  3ac51a75-07f4-43e4-a0e7-91476b934870    -----------删除uuid
+
+virsh  help   帮助
+virsh secret-list  				------------查看secret uuid
+#ceph  auth   get-key  client.admin        -------------查看秘钥
+	或者  vim  /etc/ceph/ceph.client.admin.keyring
+
+virsh    secret-set-value  --secret  00a421a6-9fa1-4fae-ad3c-6eaa794e33d3  --base64 
+AQBA9r5bqe8EBxAAknX3+bUyZo3gLiItDz1Trw==
+	//这里secret后面是之前创建的secret的UUID
+	//base64后面是client.admin账户的密码
+	//现在secret中既有账户信息又有密钥信息   		-------把用户账户和密码添加到secret
+
+
+virsh  dumpxml  avpc  >  /tmp/avpc1.xml
+
+修改/tmp/avpc1.xml
+
+ <disk type='network' device='disk'>				------修改network
+ 33       <driver name='qemu' type='raw'/>			------修改
+ 34     <!--  <source file='/var/lib/libvirt/images/avpc.qcow2'/>  -->    -----------注释
+ 35       
+         <auth   username='admin'> 			-------客户端用户              
+          <secret type='ceph' uuid='00a421a6-9fa1-4fae-ad3c-6eaa794e33d3'/>
+		//这里的uuid就是secret的uuid,有client.admin账户和密钥信息	
+        </auth> 
+          
+         <source protocol='rbd'  name='rbd/vm1-image'>	-----镜像文件
+          <host name='192.168.4.51' port='6789'/>		-----管理主机ip和端口6789
+         </source>
+ 43         <!-- -->
+ 44       <target dev='vda' bus='virtio'/>
+ 45       <address type='pci' domain='0x0000' bus='0x00' slot='0x07' function='0x0'/>
+ 46     </disk>
+
+virsh define  /tmp/avpc1.xml	 		--------定义另一个修改过的虚拟机配置文件
+
+第一行的名字必须是当前空虚拟机的名字,否则不成功
+光盘启动设为第一项,启动安装linux  redhat  7.4 .......ok
+
+--------------cephFS--------内优操作系统---
+
+linux 红帽 
+
+只要时内优  就能用ceph    
+
+元数据(Metadata)   (存放数据属性的服务器)
+	–  任何文件系统中的数据分为数据和元数据。
+	–  数据是指普通文件中的实际数据
+	–  而元数据指用来描述一个文件的特征的系统数据
+	–  比如:访问权限、文件拥有者以及文件数据块的分布信息
+	(inode...)等
+	•  所以CephFS必须有MDSs节点
+
+1. 准备54主机,配置ssh无密码,yum源, hosts文件配置,时间同步.
+
+部署元数据服务器
+ 登陆54,安装ceph-mds软件包
+	[root@54 ~]#yum -y install ceph-mds	
+ 登陆51部署节点操作
+	[root@51 ~]#cd  /root/ceph-cluster		
+	[root@51 ceph-cluster]# ceph-deploy  mds create mysql54	 -----创建mds
+		//给mysql54拷贝配置文件,启动mds服务
+	systemctl  status   ceph-mds.target 
+
+	[root@51  ceph-cluster]#ceph-deploy  admin mysql54	  --------51把秘钥和用户信息送到54
+
+文件系统需要至少2个池
+ 
+
+[root@54 ~]# ceph	osd pool create cephfs_data	128	  -------一个池用于存储数据
+	//创建存储池,对应128个文件夹	
+[root@54 ~]# ceph	osd pool create cephfs_meatadata 128	  ----一个池用于存储元数据
+	//创建存储池,对应128个PG文件夹
+
+
+使用前面创建的池,创建文件系统
+	[root@mysql54 ~]#ceph	mds	stat	
+	看mds状态
+	e2:,	1	up:standby	
+
+[root@mysql54 ~]# ceph  fs  new  myfs1  cephfs_meatadata cephfs_data   -----给2个池创建文件系统
+new fs with metadata pool 2 and data pool 1
+//默认,只能创建1个文件系统,多余的会报错
+
+[root@mysql54 ~]# ceph  fs  ls				-------查询
+name: myfs1, metadata pool: cephfs_meatadata, data pools: [cephfs_data ]
+
+[root@mysql54 ~]# ceph  mds  stat
+e5: 1/1/1 up {0=mysql54=up:active}
+
+客户端挂载成目录
+
+mkdir  /cephfs
+[root@mysql50 ~]# mount  -t  ceph 192.168.4.51:6789:/  /cephfs/  -o  \
+> name=admin,secret=AQBA9r5bqe8EBxAAknX3+bUyZo3gLiItDz1Trw==
+
+[root@mysql50 ~]# mount  |  grep  cephfs    --------------查询挂载成功
+
+---------------------------对象存储----------在服务端创建55,云服务端---
+
+什么是对象存储
+  对象存储
+–  也就是键值存储,通其接口指令,也就是简单的GET、
+PUT、DEL和其他扩展,向存储服务上传下载数据
+–  对象存储中所有数据都被认为是一个对象,所以,任
+何数据都可以存入对象存储服务器,如图片、视频、
+音频等
+   RGW全称是Rados Gateway
+   RGW是Ceph对象存储网关,用于向客户端应用呈现
+存储界面,提供RESTful API访问接口
+
+使用55主机,环境与51 52 53 54 一样
+
+装包,在51上给55安装rgw
+	ceph-deploy  install --rgw  mysql55 
+
+	ceph-deploy	admin	mysql55   --------同步秘钥
+新建网关实例
+	启动一个rgw服务
+	[root@mysql51 ~]#ceph-deploy	rgw	create mysql55
+
+	登陆mysql55验证服务是否启动
+	[root@mysql55 ~]#ps aux	| grep	radosgw	
+	 ceph	 4109	 0.2	 1.4	2289196 14972	?  Ssl	 22:53  0:00	/usr/bin/
+	 radosgw -f	--cluster ceph --name  client.rgw.mysql54	--setuser		 
+	 ceph	--
+	 setgroup	ceph	
+	[root@mysql55	~]#	systemctl		status	ceph-radosgw@\*	
+
+修改服务端口
+	 登陆mysql55,RGW默认服务端口为7480,修改为
+	8081或80更方便客户端使用
+	[root@mysql55	~]# vim  /etc/ceph/ceph.conf	
+	[client.rgw.mysql555]		----------------放在最前面
+	host = mysql55
+	rgw_frontends = "civetweb port=80"
+	//mysql55为主机名
+	//civetweb是RGW内置的一个web服务
+	[root@mysql55	~]#	systemctl	restart	ceph-radosgw@\*	
+在客户端访问
+	curl  http://192.168.4.55 
+	
+
+使用第三方软件访问
+•  登陆mysql55(RGW)创建账户
+
+[root@mysql55 ~]#radosgw-admin	user	create  --uid="testuser"	--display-name="First User"	
+...	...	
+	"keys": [
+        {
+            "user": "testuser",
+            "access_key": "MDCUWXASZB0W3HE4ZVJ0",
+            "secret_key": "U0AEtXBTcgHkSLnxGhiOKiLWV1YWCy7g3FY3UHrf"
+        }
+    ],
+
+#	
+[root@mysql55 ~]#	radosgw-admin user info	--uid=testuser	
+//testuser为用户,key是账户访问密钥
+
+------------------------云客户端软件安装,验证上传-----------
+在客户端50安装
+yum	install	s3cmd-2.0.1-1.el7.noarch.rpm
+
+配置软件
+[root@client ~]#  s3cmd --configure		--------------一步一步敲
+	Access Key:	5E42OEGB1M95Y49IBG7B	
+	Secret Key:	i8YtM8cs7QDCK3rTRopb0TTPBFJVXdEryRbeLGK6	
+	S3 Endpoint [s3.amazonaws.com]: 192.168.4.55:80	
+	[%(bucket)s.s3.amazonaws.com]: %(bucket)s.192.168.4.55:80	
+	Use HTTPS	protocol [Yes]: No	
+	Test access with	supplied credenOals?	[Y/n]	Y	
+	Save	settings? [y/N]	y	
+	Configuration saved to '/root/.s3cfg'
+	//注意,其他提示都默认回车
+
+
+客户端测试
+	[root@mysql50 ~]#	s3cmd	ls		
+	 创建存储数据的bucket(类似于存储数据的目录)
+	[root@mysql50 ~]#	s3cmd	mb	s3://my_bucket	 -----------创建文件夹
+		Bucket 's3://my_bucket/'	created	
+	
+	[root@mysql50 ~]#	s3cmd	ls	
+		2018-05-09	08:14	s3://my_bucket	
+	[root@mysql50 ~]#	s3cmd	put	/var/log/messages	s3://my_bucket/log/	 ---上传
+
+
+
+	[root@mysql50 ~]#	s3cmd	ls				----------查看
+		2018-05-09	08:14	s3://my_bucket	
+	[root@mysql50 ~]#	s3cmd	ls	s3://my_bucket		-
+		DIR	s3://my_bucket/log/	
+	[root@mysql50 ~]#	s3cmd	ls	s3://my_bucket/log/	
+		2018-05-09	08:19	309034	s3://my_bucket/log/messages		
+	 测试下载功能
+	[root@mysql50 ~]#	s3cmd	get	s3://my_bucket/log/messages	/tmp/	   ----下载
+	 测试删除功能
+	[root@mysql50 ~]#	s3cmd	del	s3://my_bucket/log/messages	  ---删除
+
+
+
+=====10.13======haproxy======
+50 client
+51 haproxy
+52 53 54 55  安装LAMP环境
+
+yum -y install  httpd   mariadb-server.x86_64    php  (mysql代替)
+
+systemctl  restart  httpd
+...
+-------------------------php页面
+<?php
+$x=mysql_connect("localhost","root","123qqq...A");
+if($x){
+echo  ok;
+}else
+{
+echo error;
+};
+------------------------end
+环境
+
+----------------------------------------haproxy扩展
+如何应用层haproxy,修改配置文件
+
+打开/etc/haproxy/haproxy.cfg
+63行frontend   web1   192.168.4.51:80
+ acl url_html       path_end       -i .html
+ acl url_php        path_end       -i .php
+	名称		  路径结尾		-i忽略大小写   .结尾
+use_backend     htmlgroup          if url_html
+		(服务器1,服务器2...)组名 		如果    是.html结尾的,则走(htmlgroup)
+use_backend     htmlgroup          if url_php
+		(服务器3,服务器4...)组名 		如果    是.php结尾的,则走(phpgroup)
+default_backend           htmlgroup
+		默认		   html组
+以上组的配置内容(2个组)
+	backend  htmlgroup
+	      balance     roundrobin				//使用算法
+	      server      weba 192.168.4.52:80 check	//主机1
+	      server      webb 192.168.4.53:80 check	//主机2
+	  
+	backend  phpgroup
+	      balance     roundrobin
+	      server      webc 192.168.4.54:80 check	//主机3
+	      server      webd 192.168.4.55:80 check	//主机4
+
+systemctl  restart   haproxy
+
+当访问html结尾   只访问主机1 和主机2 的页面
+
+当访问php结尾   只访问主机3 和主机4 的页面
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

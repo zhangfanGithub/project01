@@ -1,0 +1,197 @@
+9.20=============mysql视图=================
+概念:
+create  view   名字(字段)  as  sql查询---------创建视图
+create  view  名(vname,vuid) as select   name,uid  from user;
+
+show  table  status;
+show table status  where  comment="view"\G;  -----------查看视图表状态
+
+
+show  create  view  v2\G;    ----------------查看键表的命令
+
+
+create  view v4 as select  name as vname,uid as vuid from user;--------创建视图,直接在后修改
+create  or  replace view v4 as select  name as vname,uid as vuid from user
+---------覆盖存在的文件
+
+
+with  check  option   -----------------支持检查选项,默认CASCADED都满足
+
+with local check option--------------仅满足view检查
+--------------------下午----------------存储过程------------------------------------
+创建存储过程
+存储过程是建在库里的,所以use  库名里去
+数据库函数脚本方法体
+ -------------------------------创建函数
+delimiter //
+create procedure p1()         
+begin
+   select *  from db9.user limit 10;
+end
+//
+delimiter ;
+
+------------------------这个函数放在mysql.proc下
+select   db,name,type  from mysql.proc;   -----------p1的查看方法
+
+drop  procedure  p1;   -------------删一个存储过程
+
+
+用户变量  
+定义 set  @变量名=值;
+输出  select   @变量名;
+输出全局变量   select  @@变量名;
+
+show  global  variables;    显示全局变量
+show  session   variables;   查看会话变量
+
+declare   x   局部变量
+
+mysql> delimiter //
+mysql> create   procedure  p3()
+    -> begin
+    -> declare x int(2) default 1;
+    -> declare  y char(10);
+    -> set y="bob";
+    -> select x;
+    -> select y;
+    -> end
+    -> //
+mysql> delimiter ;
+
++  -  *   /或div(整数)   %
+------------------------------------------in
+存储过程的;局部变量
+delimiter //
+create  procedure  p5(in  s  char(20))
+     begin
+    declare x int(2);
+    
+    select count(name) into x  from  db9.user  where shell=s;
+     select  x;
+	end
+	
+delimiter ;
+call p5("/bin/bash");
+-----------------------------------------out
+out参数,使用方法时给输出的变量
+
+delimiter //
+create  procedure  p6(out  s  int(2))
+     begin
+    declare y int(2);
+    
+    select count(name) into y  from  db9.user  ;
+     select  y;
+	end//
+	
+delimiter ;
+call p6(@i);
+-------------------------------------inout(即有值还有输出变量功能)
+
+delimiter //
+create  procedure  p7(inout num  int(2))
+     begin
+    select  num; 
+    select count(name) into num  from  db9.user  ;
+    select  num;
+    end//	
+delimiter ;
+set @i=5;
+call p7(@i);
+
+-----------------------------if  语句
+if 条件测试 then
+代码1 .. ..
+.. ..
+else
+代码2 .. ..
+.. ..
+end if;
+没有冒号,end if;结尾  
+delimiter //
+create  procedure  p9(in x  int(2))
+     begin
+	if  x is not null then     
+    select  * from db9.user where  id=x;
+	else
+    select *  from  db9.user where id=1;
+    end if;
+    end //	
+delimiter ;
+-----------------------------------------------------循环结构(方法里使用)
+
+while 条件判断 do
+循环体
+.. ..
+end while ;
+
+---------------------------------------------死循环
+
+loop
+...
+end  loop;
+
+--------------------------------------------------
+repeat
+循环体
+.. ..
+until 条件判断
+end repeat;
+
+----------------------------------------------
+
+============2018.9.21========优化================================
+
+query_cache_limit  
+
+
+
+query_cache_size
+query_cache_type = 0|1|2
+0.禁用查询缓存
+1.启动查询缓存
+2.但需要手动设置缓存本次的查询结果.
+
+Qcache_hit  50 在缓存里找到的次数
+Qcache_inserts  100    缓存查询次数           
+50%命中率
+
+log-bin
+查询日志   :   记录数据库所有sql命令
+
+慢查询日志  :  记录数据库服务执行超过指定时间显示查询结果的sql命令,默认10s
+slow-query-log  启用慢查询
+slow-query-log-file 指定慢查询日志文件
+long-query-time   超过时间(默认10秒)
+log-queries-not-using-indexes   记录未使用索引的查询
+
+mysqldumpslow   慢日志  >   /man.sql   给程序员优化用的
+ 
+
+
+-----------------------------------------数据分片--------------
+数据存储在不同地点不同服务器上
+mycat
+10个规则
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

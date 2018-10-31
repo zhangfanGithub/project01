@@ -1,0 +1,151 @@
+2018.9.19   高可用集群(一主多从)MHA
+
+软件依赖  安装 yum -y localinstall  perl-*
+50
+51 主库
+52 从库(备主)
+53 从库(备主)
+54 从库
+55 从库
+56 manager
+安装rpm包:
+perl-Config-Tiny-2.14-7.el7.noarch.rpm
+perl-Mail-Sender-0.8.23-1.el7.noarch.rpm
+perl-MIME-Types-1.38-2.el7.noarch.rpm
+perl-Email-Date-Format-1.002-15.el7.noarch.rpm
+perl-Mail-Sendmail-0.79-21.el7.art.noarch.rpm
+perl-Parallel-ForkManager-1.18-2.el7.noarch.rpm
+perl-Log-Dispatch-2.41-1.el7.1.noarch.rpm
+perl-MIME-Lite-3.030-1.el7.noarch.rpm
+
+[root@db108 share]# yum -y install perl-*.rpm
+
+1.
+把vip地址部署在当前主数据库51上.
+ifconfig  eth0:1 192.168.4.100  ----------浮动ip
+
+2.在所有数据节点授权
+grant all on *.* to root@'%' identified by '123qqq...A';  --------授权用户
+
+所有主机安装mha4mysql-node-0.56-0.el6.noarch.rpm    -------有依赖perl-DBI   perl-DB-mysql
+56安装  mha4mysql-manager-0.56.tar.gz
+ perl Makefile.PL  ------------会报错
+外:perl-ExtUtils-CBuilder perl-ExtUtils-MakeMaker(安装)
+ yum list  |  grep CPAN   ----------------查看有没有依赖包
+ 然后再次perl  Makefile.PL    ---->make   ------>   make install 
+ 创建管理命令  cp  -r bin   /root/   把manage目录下的bin拷贝到root下,方便
+
+3.所有数据库服务器上禁用自动删除中继日志文件
+set  global  relay_log_purge=off
+
+4.在56上创建文件夹随意(/etc/mha_manager)
+cp ./samples/conf/app1.cnf   /etc/mha_manager/   ---------将配置文件放到创建的文件夹下
+
+在51,52,53手动添加replication授权用户;
+grant replication slave  on *.* to  repluser@'%' identified by '123qqq...A';
+在51,52,53,54,55数据库上查看root@'%'用户;
+
+5.vim  编辑该文件
+ [server default]
+manager_workdir=/etc/mha_manager
+manager_log=/etc/mha_manager/manager.log
+master_ip_failover_script=/etc/mha_manager/master_ip_failover
+
+ssh_user=root
+ssh_port=22
+
+repl_user=repluser
+repl_password=123qqq...A
+
+user=root
+password=123qqq...A
+
+
+[server1]
+hostname=192.168.4.51
+candidate_master=1
+
+[server2]
+hostname=192.168.4.52
+candidate_master=1
+
+[server3]
+hostname=192.168.4.53
+candidate_master=1
+
+[server4]
+hostname=192.168.4.54
+no_master=1
+
+[server5]
+hostname=192.168.4.55
+no_master=1
+
+
+6.二次开发脚本,vip的转换
+ master_ip_failover   放到 管理目录下
+修改35行,vip改成主库的192.168.4.100
+my $vip = '192.168.4.100/24';  # Virtual IP 
+my $key = "1";
+my $ssh_start_vip = "/sbin/ifconfig eth0:$key $vip";
+my $ssh_stop_vip = "/sbin/ifconfig eth0:$key down";
+
+7.测试配置(在56)
+ssh和主从
+ masterha_check_ssh  --conf=/etc/mha_manager/app1.cnf  -------测试ssh
+都ok
+masterha_check_repl  --conf=/etc/mha_manager/app1.cnf  -------测试主从
+healthy健康
+ masterha_manager   --conf=/etc/mha_manager/app1.cnf ---------启动服务
+masterha_stop  --conf=/etc/mha_manager/app1.cnf ---------停止
+
+8.添加宕机切换和忽略最后时间
+masterha_manager   --conf=/etc/mha_manager/app1.cnf
+			--remove_dead_master_conf    //删除宕机主库配置
+			--ignore_last_failover     //忽略xxx.health文件
+
+
+9.检测高可用性
+关闭51数据库,
+在56查看状态  masterha_check_status   --conf=/etc/mha_manager/app1.cnf
+在55,54 查看主机mysql  -uroot  -p123qqq...A -e  "show slave status\G" | grep 192.168.4.5
+
+10,恢复老大主库
+
+systemctl restart   mysqld
+把当前51配置为当前主库52的从库
+# masterha_manager   --conf=/etc/mha_manager/app1.cnf   --remove_dead_master_conf  --ignore_last_failover     ---重新启动
+
+英文单词
+temporary  临时
+valid  /  invalid   有效/无效
+alter   改变
+identified  身份/识别
+id=identity  身份
+I  order  you   我命令你
+descend   下降   aescend   上升
+
+duplicate   复制
+
+------------------环境搭建----------------------------------------------
+51主:
+plugin-load ="rpl_semi_sync_master=semisync_master.so;rpl_semi_sync_slave=semisync_slave.so"
+rpl-semi-sync-master-enabled = 1
+rpl-semi-sync-slave-enabled = 1
+
+
+
+
+
+change master to master_host="192.168.4.51",
+     master_user='repluser',
+    master_password='123qqq...A',
+    master_log_file='master51.000001',
+   master_log_pos=701;
+
+
+
+
+
+
+

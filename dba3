@@ -1,0 +1,644 @@
+===中秋回第一天===9.25================Redis=============================
+
+概念:分布式内存数据库
+
+www.redis.cn  
+
+50:安装redis
+源码安装,无需configure,直接make &&  make install 
+
+进入utils后,   ./install_server.sh  进行配置
+6379一直回车,
+Port           : 6379
+Config file    : /etc/redis/6379.conf   ---------------------无需修改
+Log file       : /var/log/redis_6379.log 	-------------
+Data dir       : /var/lib/redis/6379	   ----------------------数据库目录
+Executable     : /usr/local/bin/redis-server
+Cli Executable : /usr/local/bin/redis-cli    -----------------
+501:requirepass 123456    ----------------密码
+/etc/init.d/redis_6379   stop/start  --------------停止/启动服务(shell脚本)
+
+
+[root@mysql50 ~]# redis-cli  	-------------连接本机的redis数据库服务
+127.0.0.1:6379> ping
+PONG
+
+– set keyname keyvalue //存储
+– get keyname //获取
+– select 数据库编号0-15 //切换库
+– keys * //打印所有变量
+– keys a? //打印指定变量
+– EXISTS keyname //测试是否存在
+– ttl keyname //查看生存时间
+– type keyname //查看类型
+
+– move keyname dbname //移动变量
+– expire keyname 10 //设置有效时间
+– del keyname //删除变量
+– flushall //删除所有变量
+– save //保存所有变量到硬盘
+– shutdown //关闭redis服务
+
+如果再连,需要启动/etc/init.d/redis_6379  start
+
+# 1k => 1000 bytes
+  13 # 1kb => 1024 bytes
+  14 # 1m => 1000000 bytes
+  15 # 1mb => 1024*1024 bytes
+  16 # 1g => 1000000000 bytes
+  17 # 1gb => 1024*1024*1024 bytes
+--------------------------------------
+常用配置选项
+
+– port 6379 //端口
+– bind 127.0.0.1 //IP地址
+– tcp-backlog 511 //tcp连接总数
+– timeout 0 //连接超时时间
+– tcp-keepalive 300 //长连接时间
+– daemonize yes //守护进程方式运行
+– databases 16 //数据库个数
+– logfile /var/log/redis_6379.log //日志文件
+– maxclients 10000 //并发连接数量
+– dir /var/lib/redis/6379 //数据库目录
+
+修改配置文件/etc/redis/**    修改密码
+重启---->登录  -a  123456
+或者auth  123456  
+----下午--------------部署LNMP+Redis-------------------------------
+
+yum -y install gcc gcc-c++ pcre-devel zlib-devel
+php  php-mysql   php-fpm...........
+nginx  -t   测试
+
+安装依赖
+yum -y install autoconf automake
+安装模块
+解压    php-redis-2.2.4.tar.gz   ---->  进入,phpize  --->
+-->./configure --with-php-config=/usr/bin/php-config
+make  &&   make  install 
+
+ /usr/lib64/php/modules/   --------------安装路径
+
+ls /usr/lib64/php/modules/    ----------模块查看
+修改php配置文件vim  /etc/php.ini
+extension_dir = "/usr/lib64/php/modules/"    ------------------模块目录
+extension = "redis.so"     ---------------去_dir,加模块
+php支持redis模块
+
+编写php代码,将数据存储在本机的redis里
+<?php
+$redis=new  redis();
+$redis->connect('127.0.0.1',6379);
+$redis->set('school','tarena');
+echo $redis->get('school');
+?>
+
+redis-server  /etc/redis/6379.conf    ------------------可用安装文件启动
+
+===9.26====第二天=========redis集群========================
+准备51-56机器
+都带redis环境
+cluster-enabled yes	--------------------------修改三行集群配置.//启用集群
+cluster-config-file nodes-xxxx.conf    ------------------//指定集群信息文件(修改)
+cluster-node-timeout 5000  ---------------//请求超时 5 秒
+
+# cd /var/lib/redis/6379/
+# ls
+dump.rdb  nodes-6356.conf    -------------有这个文件
+
+netstat -utnlp | grep redis-server------------集群通信端口 默认服务端口+10000
+
+2.创建集群
+ 2.1 部署
+# rpm  -q  ruby    --------------安装软件包,管理工具gem
+  未安装软件包 ruby 
+# yum  -y install  ruby  rubygems
+# rpm  -hiv  --nodeps  ruby-devel-2.0.0.648-30.el7.x86_64.rpm
+# gem  install  redis-3.2.1.gem    -------------安装管理工具
+在redis源码包下/redis-4.0.8/src/redis-trib.rb  --->  拷贝到/root/bin/下
+主库至少三台,replicas  1  表示每个主库有一个从库
+ 2.2 创建集群
+redis-trib.rb   create    --replicas 1  192.168.4.51:6351 192.168.4.52:6352 192.168.4.53:6353 192.168.4.54:6354 192.168.4.55:6355 192.168.4.56:6356
+ 2.3 查看集群信息455
+>cluster  info     -----------集群信息
+>cluster  node   -----------查看集群节点
+# redis-trib.rb   check  192.168.4.52:6352   -------------在管理主机查看主从息
+3.工作过程
+ 3.1 存储数据的过程
+	在客户端访问任意一台master主机取数据
+	redis-cli -c -h ip地址  -p 端口
+     
+ 3.2 查看数据的过程
+	# redis-cli  -c  -h 192.168.4.51 -p 6352   -------------在50客户端链接任意
+ 3.3 使用集群存储和查看数据
+	工作槽位 16384个(一共),每一个主库有16384/n个(只用来区分存储的位置)
+	槽的计算 :  key和crc16算法运算   得出一个值和16384做取余运算
+
+4.管理集群
+ 4.1 向集群里添加新主机
+	添加master角色的主机:  1 运行redis和启用配置
+	扣一点槽,重新分片
+	# ./redis-trib.rb add-node 新主机Ip:端口    192.168.4.51:6351    ----------------添加新主机(在管理机器51上)
+	如果添加后还是从库,则关闭50主机 且 删除/var/lib/redis/6379/*,再在51管理主机添加.
+	重新分片,平摊16384.  redis-trib.rb  reshard  192.168.4.51:6351
+	分4096个槽,给谁给(--------),all,yes
+   redis-trib.rb add-node --slave [--master-id id值]  192.168.4.57:6357 192.168.4.51:6351   -----添加slave
+ 4.2 从集群里删除主机
+释放hash槽,   redis-trib.rb  reshard   192.168.4.51:6351	  ------先释放
+redis-trib.rb   del-node   集群ip   被删除主机id	--------再删除主机
+
+5.重新添加移除的主机
+把50中的ok变为fail才可以再次添加
+cluster  reset   重置cluster  info的第一个
+再次添加
+注意(分配槽的时候,source  )
+
+
+5.1 什么时候集群无法工作
+	一组  主从   都挂  就集群down了
+
+
+ for  i in {51..57}; do ssh 192.168.4.$i "sed -i '815s/^/#/;823s/^/#/;829s/^/#/' /etc/redis/6379.conf"; done  
+
+=======第三天 ==9.28=======Redis主从同步====持久化(难点)=====数据类型===========
+redis主从同步
+原理
+工作原理
+	– slave向master发送sync命令
+	– master启动后台存盘进程,并收集所有修改数据命令
+	– master完成后台存盘后,传送整个数据文件到slave
+	– slave接收数据文件,加载到内存中完成首次完全同步
+	–后续有新数据产生时,master继续将新的数据收集到的修改命令依次传给slave,完成同步
+缺点
+	– 网络繁忙,会产生数据同步延时问题
+	– 系统繁忙,会产生数据同步延时问题
+主51 从52  从53结构
+INFO replication  查看从库信息
+(重启就没有了)
+SLAVEOF 192.168.4.51 6351  --------------链接配置主库
+SLAVEOF  no  one    -----------------取消从库
+永久配置:将52成为51的从库
+修改配置文件 vim  /etc/redis/6379.conf
+   slaveof  主ip  主端口
+   masterauth  123456   ---------在52的配置文件记录主库密码
+在从库中不允许flushall,因为不容许执行写操作.
+
+----------------------------------------------
+
+Redis烧饼模式(难点)
+• 哨兵模式
+– 主库宕机后,从库自动升级为主库
+– 在slave主机编辑sentinel.conf文件
+– 在slave主机运行哨兵程序
+[root@redis52 ~]# vim /etc/sentinel.conf
+	sentinel monitor redis51 192.168.4.51 6351 1
+	sentinel auth-pass redis51 123456
+[root@redis52 ~]# redis-sentinel /etc/sentinel.conf    ------启动哨兵
+-----解释----
+sentinel monitor 主机名 ip地址 端口 票数
+主机名:自定义
+IP地址:master主机的IP地址
+端 口:master主机 redis服务使用的端口
+票 数:主库宕机后, 票数大于1的主机被升级为主库
+
+主库51宕机后,从库52成为主库info  replication查看
+哨兵配置文件,发生变化
+
+真实:  三个哨兵最合理
+--------------Redis持久化(难点)------------------------------ 
+
+RDB(redis database)
+间隔时间存储数据,
+先停止(会保存到dump.rdb一次)
+/var/lib/redis/6379/dump.rdb   -------------数据在这里(拷过来 拷过去)
+
+启动就ok
+
+参数219     save 900 1    ---------// 900秒内且有1次修改
+   220    save 300 10     ---------//300秒内且有10次修改
+   221    save 60 10000    ---------//60秒内且有10000修改
+		    秒    次
+	    save //禁用RDB
+
+• 手动立刻存盘
+– save    //阻塞写存盘(不能写)
+– bgsave     //不阻塞写存盘
+• 压缩
+– rdbcompression yes|no
+• 在存储快照后,使用crc16算法做数据校验
+– rdbchecksum yes|no
+• bgsave出错时停止写操作
+– stop-writes-on-bgsave-error yes|no
+
+• RDB优点
+– 高性能的持久化实现 —— 创建一个子进程来执行持久化,先将数据写入临时文件,持久化过程结束后,再
+用这个临时文件替换上次持久化好的文件;过程中主进程不做任何IO操作
+– 比较适合大规模数据恢复,且对数据完整性要求不是非常高的场合
+• RDB的缺点
+– 意外宕机时,最后一次持久化的数据会丢失
+
+
+-------------------AOF介绍------------追加-----
+
+• 只做追加操作的文件,Append Only File
+– 记录redis服务所有写操作
+– 不断的将新的写操作,追加到文件的末尾
+– 使用cat命令可以查看文件内容
+默认没有开启:
+appendonly  yes    
+
+相关配置参数
+– appendfilename "appendonly.aof"  --------//指定文件名
+
+• AOF文件记录写操作的方式
+– appendfsync always -----//有新写操作立即记录
+– appendfsync everysec ------------//每秒记录一次
+– appendfsync no -----------//从不记录
+两个都存在时,aof的优先级高
+redis-check-aof --fix appendonly.aof    ------------修复到最后一次正确操作(最后追加)
+
+dump根据判断会自动修复
+
+redis数据类型
+--------------------string-------(命令多)--------
+
+字符string
+ • set key value [ex seconds] [px milliseconds] [nx|xx]
+	– 设置key及值,过期时间可以使用秒或毫秒为单位,nx不存在  xx存在的情况
+
+• setrange key offset value
+	
+	> set first "hello world"
+	> setrange first 6 "Redis"   -----------从偏移量开始复写key的特定位的值(0开始)
+
+• strlen key,统计字串长度
+	> strlen first
+• append key value
+	 存在则追加,不存在则创建key及value,返回key长度
+	> append myname jacob
+• setbit key offset value
+	– 对key所存储字串,设置或清除特定偏移量上的位(bit)
+	– value值可以为1或0,offset为0~2^32之间
+	– key不存在,则创建新key
+	> setbit bit 0 1    ----------/设置bit第0位为1
+	> setbit bit 1 0   - ---------/设置bit第1位为0
+	> setbit bit 2 0   - ---------/设置bit第2位为0
+• bitcount key   ----------------– 统计字串中被设置为1的比特位数量
+
+场景说明:
+记录网站用户上线频率,如用户A上线了多少天等类似的数据
+如用户在某天上线,则使用setbit,以用户名为key,将网站上线日为offset,并在
+该offset上设置1,最后计算用户总上线次数时,使用bitcount用户名即可。
+这样,即使网站运行10年,每个用户仅占用10*365比特位即456字节。
+
+• decr key    ----------– 将key中的值减1,key不存在则先初始化为0,再减1
+	> set test 10
+	> decr test
+• decrby key decrement---------- 将key中的值,减去decrement
+	> set count 100
+	> decrby count 20
+incr减
+
+mget   获取多个值(字符类型)
+
+• getrange key start end ------– 返回字串值中的子字串,截取范围为start和end
+– 负数偏移量表示从末尾开始计数,-1表示最后一个字符,-2表示倒数第二个字符
+	> set first "hello,the world"
+	> getrange first -5 -1
+	> getrange first 0 4
+
+• incrbyfloat key increment    ------------– 为key中所储存的值加上浮点数增量 increment
+	> set num 16.1
+	> incrbyfloat num 1.1
+• mget key [key...]   ----------------– 获取一个或多个key的值,空格分隔,具有原子性
+• mset key value [key value ...]------------– 设置多个key及值,空格分隔,具有原子性
+
+declare  -a  |  grep   数组名
+
+
+
+----------------------------------列表 list----------------------------
+• lpush key value [value...]
+	– 将一个或多个值value插入到列表key的表头
+	– Key不存在,则创建key
+> lpush list a b c    -----------------//list1值依次为c、b、a
+
+• lrange key start stop ------------– 从开始位置读取key的值到stop结束
+> lrange list 0 2   ----------------//从0位开始,读到2位为止
+> lrange list 0 -1    -----------------------//从开始读到结束为止
+> lrange list 0 -2    ---------------------//从开始读到倒数第2位为止
+
+lpop   key   ------------删除并返回头元素
+
+
+
+hash表  
+
+
+
+=9.29======搭建mongdb=============第四天=============================
+
+介于关系型和非关系之间
+– 一款基于分布式文件存储的数据库,旨在为WEB应用提供可扩展的高性能数据存储解决方案
+– 将数据存储为一个文档(类似于JSON对象),数据结构由键值(key=>value)对组成
+– 支持丰富的查询表达,可以设置任何属性的索引
+– 支持副本集,分片
+mkdir   /etc/mongodb
+mkdir -p etc log data/db    -------建文件夹
+在etc下创建 mongodb.conf文件:
+	logpath=/etc/mongodb/log/mongodb.log
+	logappend=true
+	dbpath=/etc/mongodb/data/db
+	fork=true
+
+启动服务
+# ./bin/mongod -f /usr/local/mongodb/etc/mongodb.conf
+# ./bin/mongod -f  /etc/mongodb/etc/mongodb.conf --shutdown   ---------关闭
+查看进程
+# ps -C mongod
+查看端口
+# netstat -utnlp | grep :27017
+
+本地连接,默认没有密码
+[root@bogon ~]# /usr/local/mongodb/bin/mongo
+
+> show dbs    //显示已有的库
+添加ip和端口到配置文件/etc/mongodb/etc/mongodb.conf
+bind_ip=192.168.4.50
+port=27050
+启动前先停止以前的,再启动
+/usr/local/mongodb/bin/mongo  --host 192.168.4.50 --port 27050   ------使用ip和端口链接
+
+在其他机器如何链接
+把/etc/mongodb/bin/mongo  拷贝到其他主机
+[root@mysql51 ~]# /root/bin/mongo   --host 192.168.4.50 --port 27050   链接50
+
+-------------------命令------------------------
+– show dbs //查看已有的库
+– db //显示当前所在的库
+– use 库名 //切换库,若库不存在延时创建库
+– show collections 或 show tables        //查看库下已有集合
+– db.dropDatabase()     //删除当前所在的库
+
+创建集合
+db.t1.save({'name':'zf','sex':'m','age':'20'})
+db.t1.drop()
+
+集合名命名规范
+– 不能是空字符串""
+– 不能含有\0字符(空字符),此字符表示集合的结尾
+– 不能以“system.”开头,这是为系统集合保留的前缀
+– 用户创建的集合名字不能含有保留字符
+
+– db.集合名.find()
+– db.集合名.count()
+– db.集合名.insert({“name”:”jim”})
+– db.集合名.find({条件})
+– db.集合名.findOne() //返回一条文档
+– db.集合名.remove({}) //删除所有文档
+– db.集合名.remove({条件}) //删除匹配的所有文档
+
+
+插入记录
+db.t1.insert({ title: 'MongoDB 教程',description: 'MongoDB 是一个 Nosql 数据库',by: 'MongoDB中文网',url: 'http://www.mongodb.org.cn',tags: ['mongodb', 'database', 'NoSQL'],likes: 100})
+
+字符串string
+– UTF-8字符串都可以表示为字符串类型的数据
+– {name:"张三"} 或 { school:"tarena"}
+布尔bool
+– 布尔类型有两个值true和false,{x:true}
+空null
+– 用于表示空值或者不存在的字段,{x:null}
+
+• 数值
+– shell默认使用64位浮点型数值。{x:3.14}或{x:3}。
+– NumberInt(4字节整数){x:NumberInt(3)}
+– NumberLong(8字节整数){x:NumberLong(3)}
+• 数组array
+– 数据列表或数据集可以表示为数组
+– {x: ["a","b", "c"]}
+
+
+
+代码
+	– 查询和文档中可以包括任何JavaScript代码
+	– {x: function( ){/* 代码 */}}
+日期
+	– 日期被存储为自新纪元以来经过的毫秒数,不含时区
+	– {x:new Date( )}
+对象
+	– 对象id是一个12字节的字符串,是文档的唯一标识
+	– {x: ObjectId() }
+
+
+• 内嵌
+– 文档可以嵌套其他文档,被嵌套的文档作为值来处理
+– {tarena:{address:"Beijing",tel:"888888",person:"hansy" }}
+• 正则表达式
+– 查询时,使用正则表达式作为限定条件
+– {x:/正则表达式/}
+
+----------------------导入/导出-------------
+语法格式1
+# mongoexport [--host IP地址 --port 端口 ] -d 库名 -c 集合名 -f 字段名1,字段名2 --type=csv > 目录名/文件名.csv
+
+语法格式2
+# mongoexport --host IP地址 --port 端口 -d 库名 -c 集合名 -q '{条件}' -f 字段名1,字段名2 --type=csv > 目录名/文件名.csv
+
+以json的格式导出,不带-f
+# mongoexport  --host 192.168.4.50 --port 27050 -d db1 -c t1  --type=json  >  /mongodbt1.json
+
+
+以csv格式导出,带-f
+mongoexport  --host 192.168.4.50 --port 27050 -d db1 -c t1  -f _id,name  --type=csv  > /mongodbt1.csv 
+
+将passwd放入mongodb,先将":"换为",",sed -i 's/:/,/g'  /passwd
+# mongoimport  --host 192.168.4.50 --port 27050  -d user  -c t2 -f   name,mm,uid,gid,commit,home,shell  --type=csv  /passwd.csv    -----------导入
+
+-------------------------备份----
+# mongodump [ --host ip地址 --port 端口 ]   -------------备份当前目录
+# mongodump [ --host ip地址 --port 端口 ] -d 数据库名 -c 集合名 -o 目录    --------指定备份目录和库
+注意:  local不会被备份(本地文件),config也不会被备份(集群系统文件)
+mkdir  /mbak
+[root@mysql50 db]# ls  /mbak/
+admin  db1  user  userdb
+# bsondump  /mbak/db1/t1.bson   ----------查看bson文件内容
+数据恢复
+# mongorestore --host IP地址 --port 端口 -d 数据库名 [ -c 集合名 ] -o 备份目录名
+
+
+==========9.30=============mongoDB副本集============================
+--指在多个服务器上存储数据副本,并实现数据同步
+– 提高数据可用性、安全性,方便数据故障恢复
+
+MongoDB复制原理
+• 副本集工作过程
+– 至少需要两个节点。其中一个是主节点,负责处理客户端请求,其余是从节点,负责复制主节点数据
+– 常见搭配方式:一主一从、一主多从
+– 主节点记录所有操作oplog,从节点定期轮询主节点获取这些操作,然后对自己的数据副本执行这些操作,从而保证从节点的数据与主节点一致
+1.6版本开始,支持replication  
+先停掉所有mongodb
+/etc/mongodb/bin/mongod -f  /etc/mongodb/etc/mongodb.conf --shutdown
+
+
+51,52,53配置文件,追加 replSet=rs1
+启动mongo
+
+51做主库,则敲集群命令,进去51再敲命令,
+config = {
+	_id:"rs1",members:[
+	{_id:0,host:"192.168.4.51:27051"},						   	{_id:1,host:"192.168.4.52:27052"},				
+	{_id:2,host:"192.168.4.53:27053"}
+	]
+}
+会有提示.
+
+创建集群
+> rs.initiate(config)
+{
+	"ok" : 1,
+	"operationTime" : Timestamp(1538272018, 1),
+	"$clusterTime" : {
+		"clusterTime" : Timestamp(1538272018, 1),
+		"signature" : {
+			"hash" : BinData(0,"AAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+			"keyId" : NumberLong(0)
+		}
+	}
+}
+rs1:SECONDARY>               
+rs1:PRIMARY>
+    ---------------------------选举,成为主库
+
+• 查看状态信息
+ rs.status( )
+• 查看是否是master库
+ rs .isMaster( )
+
+
+db.getMongo().setSlaveOk()--------------在从库上执行,则可以查看数据
+
+检测 : 断掉51主库,会自动改变新的主库
+
+-------------------------------管理文档-----------
+插入文档
+	> db.集合名.save({ key:“值”,key:”值”})               ---------------save
+	注意
+	– 集合不存在时创建集合,然后再插入记录
+	– _id字段值已存在时,修改文档字段值
+	– _id字段值不存在时,插入文档
+	> db.集合名.insert({key:"值",key:"值"})
+	
+	> db.集合名.insertMany(		----------------插入多条记录
+	[
+	{name:"xiaojiu",age:19} ,
+	{name:"laoshi",email:"yaya@tedu.cn"}
+	]
+	)
+
+查询文档
+db.集合名.find({条件},{定义显示的字段})
+db.user.find({},{_id:0,name:1,shell:1})
+//0 不显示,1 显示
+行数显示限制
+• limit(数字)    //显示前几行
+	> db.集合名.find().limit(3)
+• skip(数字)    //跳过前几行
+	> db.集合名.find().skip(2)
+• sort(字段名)	//1升序,-1降序
+	> db.集合名.find().sort({age:1|-1})
+	>db.user.find({shell:"/sbin/nologin"},{_id:0,name:1,uid:1,shell:1}).skip(2).limit(2)
+	
+	> db.user.find({uid:{$in:[1,6,9]}})     -----------在....里    -----------范围比较
+	> db.user.find({uid:{$nin:[1,6,9]}})		---------不在......里
+	> db.user.find({$or: [{name:"root"},{uid:1} ]})	--------或
+											--------数值比较
+db.t2.find({uid:{$gt:10,$lt:40}},{_id:0,uid:1,name:1})    -------查询uid在10-40之间的数据 
+正则匹配
+	> db.user.find({name: /^a/ })
+数值比较
+– $lt $lte $gt $gte $ne
+	> db.user.find( { uid: { $gte:10,$lte:40} } , {_id:0,name:1,uid:1})
+	> db.user.find({uid:{$lte:5}})
+
+> db.user.find({name:null})  ------------查询空字段或空值
+更新文档
+	db.t2.update({uid:{$lte:4}},{mm:'AAA'})        --------------魔性更新
+	把文档的其他字段都删除了,只留下了password字段,
+	且只修改与条件匹配的第1行!!!
+	
+	>db.user.update({条件},{$set:{修改的字段}} ,false,true)   ---------$set只修改匹配的
+	字段,false,true表示所有
+	db.t2.update({uid:{$lte:4}},{$set:{mm:'AAA'}},false,true)
+	
+$unset 删除与条件匹配文档的字段
+	> db.集合名.update({条件},{$unset:{key:values}})
+	> db.user3.update({name:"bin"},{$unset:{password:"A"}})
+$inc 条件匹配时,字段值自加或自减
+	> db.集合名.update({条件},{$inc:{字段名:数字}})
+	> db.user.update({name:"bin"},{$inc:{uid:2}})
+	> db.user.update({name:“bin”},{$inc:{uid:-1}})
+	//字段值自加2
+	//字段值自减1
+ $push 向数组中添加新元素
+	> db.集合名.update({条件},{$push:{数组名:"值"}})
+	> db.user.insert({name:"bob",likes:["a","b","c","d","e","f"]})
+	> db.user.update({name:“bob”},{$push:{likes:“w"}})
+$addToSet 避免重复添加
+	> db.集合名.update({条件},{$addToSet:{数组名:"值"}})
+	> db.user.update({name:"bob"},{$addToSet:{likes:"f"}})
+$pop 从数组头部删除一个元素
+	> db.集合名.update({条件},{$pop:{数组名:数字}})
+	> db.user.update({name:"bob"},{$pop:{likes:1}})    -----------1表示最右边的
+	> db.user.update({name:"bob"},{$pop:{likes:-1}})
+$pull 删除数组指定元素
+	> db.集合名.update({条件},{$pull:{数组名:值}})
+	> db.user.update({name:"bob"},{$pull:{likes:"b"}})
+
+删除文档
+
+• $drop 删除集合的同时删除索引
+> db.集合名.drop( )
+> db.user.drop( )
+• $remove() 删除文档时不删除索引
+> db.集合名.remove({})
+> db.集合名.remove({条件})
+> db.user.remove({uid:{$lte:10}})
+> db.user.remove({})
+
+------------------redis扩展---
+后期启动aof会导致启动的时候先加载aof文件,导致文件缺失,如果shutdown则,内->硬盘会数据丢失;\
+解决办法:  拷贝dump文件.
+启动服务时用   redis-server  /etc/redis/6379.conf  --appendonly  no  
+
+里面: config  set appendonly yes   
+
+里面: bgrewriteaof   ------------将dump.rdb内容写到aof文件里
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
